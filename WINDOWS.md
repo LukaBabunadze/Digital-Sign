@@ -12,11 +12,11 @@ Use either a local SQL Server instance or Docker.
 
 ### Option 1: Docker
 
-```bash
-docker run -e "ACCEPT_EULA=Y" \
-  -e "MSSQL_SA_PASSWORD=Your_strong_password123" \
-  -p 1433:1433 \
-  --name digital-sign-sql \
+```powershell
+docker run -e "ACCEPT_EULA=Y" `
+  -e "MSSQL_SA_PASSWORD=Your_strong_password123" `
+  -p 1433:1433 `
+  --name digital-sign-sql `
   -d mcr.microsoft.com/mssql/server:2022-latest
 ```
 
@@ -38,17 +38,17 @@ Set the connection string in `src/DigitalSignDocuments.Web/appsettings.json`:
 
 From the repository root:
 
-```bash
+```powershell
 dotnet tool restore
 dotnet restore DigitalSignDocuments.slnx
-dotnet tool run dotnet-ef database update \
-  --project src/DigitalSignDocuments.Web/DigitalSignDocuments.Web.csproj \
+dotnet tool run dotnet-ef database update `
+  --project src/DigitalSignDocuments.Web/DigitalSignDocuments.Web.csproj `
   --startup-project src/DigitalSignDocuments.Web/DigitalSignDocuments.Web.csproj
 ```
 
 ## Run the App
 
-```bash
+```powershell
 dotnet run --project src/DigitalSignDocuments.Web/DigitalSignDocuments.Web.csproj
 ```
 
@@ -59,7 +59,7 @@ Open one of the local URLs shown in the console, usually:
 
 If HTTPS is not trusted locally:
 
-```bash
+```powershell
 dotnet dev-certs https --trust
 ```
 
