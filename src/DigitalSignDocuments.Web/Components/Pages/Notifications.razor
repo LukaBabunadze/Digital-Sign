@@ -1,0 +1,63 @@
+@page "/notifications"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using DigitalSignDocuments.Web.Data
+@using DigitalSignDocuments.Web.Services
+@using Microsoft.AspNetCore.Identity
+
+@inject INotificationService NotificationService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject UserManager<ApplicationUser> UserManager
+
+<PageTitle>Notifications</PageTitle>
+
+<h1>Notifications</h1>
+
+@if (notifications.Count == 0)
+{
+    <p>No unread notifications.</p>
+}
+else
+{
+    <div class="list-group">
+        @foreach (var notification in notifications)
+        {
+            <div class="list-group-item">
+                <h5>@notification.Title</h5>
+                <p>@notification.Message</p>
+                @if (!string.IsNullOrWhiteSpace(notification.Link))
+                {
+                    <a href="@notification.Link" class="btn btn-sm btn-primary me-2">Open</a>
+                }
+                <button class="btn btn-sm btn-outline-secondary" @onclick="() => MarkReadAsync(notification.Id)">Mark read</button>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private ApplicationUser? currentUser;
+    private List<Notification> notifications = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        currentUser = await UserManager.GetUserAsync(authState.User);
+        await LoadAsync();
+    }
+
+    private async Task MarkReadAsync(int notificationId)
+    {
+        await NotificationService.MarkReadAsync(notificationId, currentUser!.Id);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (currentUser is not null)
+        {
+            notifications = await NotificationService.GetUnreadAsync(currentUser.Id);
+        }
+    }
+}

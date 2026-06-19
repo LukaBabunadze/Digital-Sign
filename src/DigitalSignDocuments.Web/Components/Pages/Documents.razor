@@ -1,0 +1,171 @@
+@page "/documents"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using DigitalSignDocuments.Web.Data
+@using DigitalSignDocuments.Web.Services
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+
+@inject ApplicationDbContext DbContext
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject UserManager<ApplicationUser> UserManager
+@inject IDocumentSigningService DocumentSigningService
+
+<PageTitle>Documents</PageTitle>
+
+<h1>Documents</h1>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert alert-info">@message</div>
+}
+
+<EditForm Model="uploadModel" OnValidSubmit="UploadAndStartAsync">
+    <DataAnnotationsValidator />
+    <ValidationSummary class="text-danger" />
+    <div class="mb-3">
+        <label class="form-label">Document</label>
+        <InputFile OnChange="OnFileSelected" class="form-control" />
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Signatory emails in signing order</label>
+        <InputTextArea @bind-Value="uploadModel.SignatoryEmails" class="form-control" rows="4" placeholder="first@example.com&#10;second@example.com" />
+        <div class="form-text">Enter one email per line. The first user signs the document hash; each later user signs the document hash plus prior signatures.</div>
+    </div>
+    <button class="btn btn-primary" type="submit">Upload and start signing</button>
+</EditForm>
+
+<h2 class="mt-4">My Documents</h2>
+@if (documents.Count == 0)
+{
+    <p>No documents yet.</p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>File</th>
+                <th>Status</th>
+                <th>Hash</th>
+                <th>Created</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var document in documents)
+            {
+                <tr>
+                    <td>@document.FileName</td>
+                    <td>@document.Status</td>
+                    <td><code>@document.Sha256Hash[..Math.Min(16, document.Sha256Hash.Length)]</code></td>
+                    <td>@document.CreatedAt.LocalDateTime</td>
+                    <td>
+                        @if (document.SigningProcess is not null)
+                        {
+                            <a href="@($"documents/{document.Id}")">Details</a>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+<h2>Active Signers</h2>
+<p class="text-muted">Use these email addresses in the ordered signatory list.</p>
+<ul>
+    @foreach (var signer in activeUsers)
+    {
+        <li>@signer.Email (@signer.FirstName @signer.LastName)</li>
+    }
+</ul>
+
+@code {
+    private readonly UploadModel uploadModel = new();
+    private IBrowserFile? selectedFile;
+    private ApplicationUser? currentUser;
+    private List<Document> documents = [];
+    private List<ApplicationUser> activeUsers = [];
+    private string? message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        currentUser = await UserManager.GetUserAsync(authState.User);
+        await LoadAsync();
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs args)
+    {
+        selectedFile = args.File;
+    }
+
+    private async Task UploadAndStartAsync()
+    {
+        if (selectedFile is null || currentUser is null)
+        {
+            message = "Choose a document first.";
+            return;
+        }
+
+        try
+        {
+            var emails = uploadModel.SignatoryEmails
+                .Split(['\r', '\n', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+
+            var signatoryUsers = await DbContext.Users
+                .Where(user => emails.Contains(user.Email!))
+                .ToListAsync();
+
+            var signatoryIds = signatoryUsers
+                .OrderBy(user => emails.IndexOf(user.Email!))
+                .Select(user => user.Id)
+                .ToList();
+
+            if (signatoryIds.Count != emails.Count)
+            {
+                message = "One or more signatory emails were not found.";
+                return;
+            }
+
+            var document = await DocumentSigningService.UploadDocumentAsync(selectedFile, currentUser.Id);
+            await DocumentSigningService.StartSigningProcessAsync(document.Id, currentUser.Id, signatoryIds);
+            uploadModel.SignatoryEmails = string.Empty;
+            selectedFile = null;
+            message = "Document uploaded and signing process started.";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        if (currentUser is null)
+        {
+            return;
+        }
+
+        documents = await DbContext.Documents
+            .Include(document => document.SigningProcess)
+            .Where(document => document.AuthorId == currentUser.Id)
+            .OrderByDescending(document => document.CreatedAt)
+            .ToListAsync();
+
+        activeUsers = await DbContext.Users
+            .Where(user => user.ApprovalStatus == UserApprovalStatus.Active && user.PublicKeyPem != null)
+            .OrderBy(user => user.Email)
+            .ToListAsync();
+    }
+
+    private sealed class UploadModel
+    {
+        [Required]
+        public string SignatoryEmails { get; set; } = string.Empty;
+    }
+}

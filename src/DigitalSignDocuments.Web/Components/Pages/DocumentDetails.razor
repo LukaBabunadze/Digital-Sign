@@ -1,0 +1,123 @@
+@page "/documents/{DocumentId:int}"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using DigitalSignDocuments.Web.Data
+@using DigitalSignDocuments.Web.Services
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+
+@inject ApplicationDbContext DbContext
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject UserManager<ApplicationUser> UserManager
+@inject IDocumentSigningService SigningService
+
+<PageTitle>Document Details</PageTitle>
+
+@if (document is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <h1>@document.FileName</h1>
+
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="alert alert-info">@message</div>
+    }
+
+    <dl>
+        <dt>Status</dt>
+        <dd>@document.Status</dd>
+        <dt>SHA-256 Hash</dt>
+        <dd><code>@document.Sha256Hash</code></dd>
+    </dl>
+
+    @if (document.SigningProcess is not null)
+    {
+        <h2>Signing Order</h2>
+        <ol>
+            @foreach (var signatory in document.SigningProcess.Signatories.OrderBy(item => item.Sequence))
+            {
+                <li>
+                    @signatory.User.Email - @signatory.Status
+                    @if (!string.IsNullOrWhiteSpace(signatory.RejectionReason))
+                    {
+                        <span class="text-muted">(@signatory.RejectionReason)</span>
+                    }
+                </li>
+            }
+        </ol>
+
+        <p>
+            <a class="btn btn-outline-primary" href="@($"chat/{document.SigningProcess.Conversation?.Id}")">Open group chat</a>
+        </p>
+
+        @if (document.SigningProcess.Status == SigningProcessStatus.Suspended)
+        {
+            <button class="btn btn-warning me-2" @onclick="ReinitiateAsync">Reinitiate process</button>
+            <button class="btn btn-danger" @onclick="CancelAsync">Cancel process</button>
+        }
+    }
+}
+
+@code {
+    [Parameter]
+    public int DocumentId { get; set; }
+
+    private ApplicationUser? currentUser;
+    private Document? document;
+    private string? message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        currentUser = await UserManager.GetUserAsync(authState.User);
+        await LoadAsync();
+    }
+
+    private async Task CancelAsync()
+    {
+        try
+        {
+            await SigningService.CancelAsync(document!.SigningProcess!.Id, currentUser!.Id);
+            message = "Signing process cancelled.";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+        }
+    }
+
+    private async Task ReinitiateAsync()
+    {
+        try
+        {
+            await SigningService.ReinitiateAsync(document!.SigningProcess!.Id, currentUser!.Id);
+            message = "Signing process reinitiated.";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        if (currentUser is null)
+        {
+            return;
+        }
+
+        document = await DbContext.Documents
+            .Include(item => item.SigningProcess!)
+            .ThenInclude(process => process.Signatories.OrderBy(signatory => signatory.Sequence))
+            .ThenInclude(signatory => signatory.User)
+            .Include(item => item.SigningProcess!)
+            .ThenInclude(process => process.Conversation)
+            .SingleOrDefaultAsync(item => item.Id == DocumentId && item.AuthorId == currentUser.Id);
+    }
+}

@@ -1,0 +1,136 @@
+@page "/keys"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using DigitalSignDocuments.Web.Data
+@using DigitalSignDocuments.Web.Services
+@using Microsoft.AspNetCore.Identity
+
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject UserManager<ApplicationUser> UserManager
+@inject IRegistrationService RegistrationService
+@inject IJSRuntime JS
+
+<PageTitle>Signing Keys</PageTitle>
+
+<h1>Signing Keys</h1>
+
+<p>
+    Generate your key pair in the browser. The private key downloads as a local text file and is never uploaded.
+    Upload only the public key together with the administrator-issued registration key.
+</p>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert alert-info">@message</div>
+}
+
+@if (currentUser is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <dl>
+        <dt>Status</dt>
+        <dd>@currentUser.ApprovalStatus</dd>
+        <dt>Public key registered</dt>
+        <dd>@(currentUser.PublicKeyRegisteredAt?.LocalDateTime.ToString() ?? "No")</dd>
+    </dl>
+
+    <button class="btn btn-primary" @onclick="GenerateKeysAsync">Generate browser key pair</button>
+
+    <EditForm Model="enrollment" OnValidSubmit="EnrollAsync" class="mt-3">
+        <DataAnnotationsValidator />
+        <ValidationSummary class="text-danger" />
+        <div class="mb-3">
+            <label class="form-label">Registration Key</label>
+            <InputText @bind-Value="enrollment.RegistrationKey" class="form-control" />
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Public Key</label>
+            <InputTextArea @bind-Value="enrollment.PublicKeyPem" class="form-control" rows="8" />
+        </div>
+        <button class="btn btn-success" type="submit">Upload public key</button>
+    </EditForm>
+
+    <hr />
+
+    <h2>Replace Public Key</h2>
+    <p>Public key replacement requires administrator approval and a new registration key.</p>
+    <EditForm Model="replacement" OnValidSubmit="RequestReplacementAsync">
+        <div class="mb-3">
+            <label class="form-label">Reason</label>
+            <InputTextArea @bind-Value="replacement.Reason" class="form-control" rows="3" />
+        </div>
+        <button class="btn btn-outline-warning" type="submit">Request replacement approval</button>
+    </EditForm>
+}
+
+@code {
+    private ApplicationUser? currentUser;
+    private readonly EnrollmentModel enrollment = new();
+    private readonly ReplacementModel replacement = new();
+    private string? message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadUserAsync();
+    }
+
+    private async Task GenerateKeysAsync()
+    {
+        enrollment.PublicKeyPem = await JS.InvokeAsync<string>("digitalSigningCrypto.generateKeyPair");
+        message = "A new private key file was downloaded. Keep it secure; it cannot be recovered by the server.";
+    }
+
+    private async Task EnrollAsync()
+    {
+        try
+        {
+            await RegistrationService.EnrollPublicKeyAsync(currentUser!.Id, enrollment.RegistrationKey, enrollment.PublicKeyPem);
+            message = "Public key enrolled successfully.";
+            enrollment.RegistrationKey = string.Empty;
+            await LoadUserAsync();
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+        }
+    }
+
+    private async Task RequestReplacementAsync()
+    {
+        try
+        {
+            await RegistrationService.RequestKeyReplacementAsync(currentUser!.Id, replacement.Reason);
+            replacement.Reason = string.Empty;
+            message = "Replacement request submitted for administrator approval.";
+            await LoadUserAsync();
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+        }
+    }
+
+    private async Task LoadUserAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        currentUser = await UserManager.GetUserAsync(authState.User);
+    }
+
+    private sealed class EnrollmentModel
+    {
+        [Required]
+        public string RegistrationKey { get; set; } = string.Empty;
+
+        [Required]
+        public string PublicKeyPem { get; set; } = string.Empty;
+    }
+
+    private sealed class ReplacementModel
+    {
+        public string? Reason { get; set; }
+    }
+}

@@ -1,0 +1,86 @@
+@page "/chat/{ConversationId:int}"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using DigitalSignDocuments.Web.Data
+@using DigitalSignDocuments.Web.Services
+@using Microsoft.AspNetCore.Identity
+
+@inject IChatService ChatService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject UserManager<ApplicationUser> UserManager
+
+<PageTitle>Group Chat</PageTitle>
+
+<h1>Group Chat</h1>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert alert-info">@message</div>
+}
+
+<div class="border rounded p-3 mb-3" style="max-height: 420px; overflow-y: auto;">
+    @foreach (var chatMessage in messages)
+    {
+        <div class="mb-2">
+            <strong>@chatMessage.Sender.Email</strong>
+            <span class="text-muted">@chatMessage.SentAt.LocalDateTime</span>
+            <div>@chatMessage.Body</div>
+        </div>
+    }
+</div>
+
+<EditForm Model="input" OnValidSubmit="SendAsync">
+    <div class="input-group">
+        <InputText @bind-Value="input.Body" class="form-control" placeholder="Write a message" />
+        <button class="btn btn-primary" type="submit">Send</button>
+    </div>
+</EditForm>
+
+@code {
+    [Parameter]
+    public int ConversationId { get; set; }
+
+    private ApplicationUser? currentUser;
+    private List<ChatMessage> messages = [];
+    private ChatInput input = new();
+    private string? message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        currentUser = await UserManager.GetUserAsync(authState.User);
+        await LoadAsync();
+    }
+
+    private async Task SendAsync()
+    {
+        try
+        {
+            await ChatService.SendMessageAsync(ConversationId, currentUser!.Id, input.Body);
+            input = new();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            messages = await ChatService.GetMessagesAsync(ConversationId, currentUser!.Id);
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+        }
+    }
+
+    private sealed class ChatInput
+    {
+        public string Body { get; set; } = string.Empty;
+    }
+}

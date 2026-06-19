@@ -1,0 +1,142 @@
+@page "/admin"
+@attribute [Authorize(Roles = "Admin")]
+@rendermode InteractiveServer
+
+@using DigitalSignDocuments.Web.Data
+@using DigitalSignDocuments.Web.Services
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+
+@inject ApplicationDbContext DbContext
+@inject IRegistrationService RegistrationService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject UserManager<ApplicationUser> UserManager
+
+<PageTitle>Admin</PageTitle>
+
+<h1>Admin</h1>
+
+@if (!string.IsNullOrWhiteSpace(issuedKey))
+{
+    <div class="alert alert-success">
+        <strong>Registration key issued.</strong>
+        <div class="mt-2">
+            Send this key through a secure channel. It will not be shown again:
+            <code>@issuedKey</code>
+        </div>
+    </div>
+}
+
+<h2>Pending Registrations</h2>
+@if (pendingUsers.Count == 0)
+{
+    <p>No pending users.</p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Date of Birth</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var user in pendingUsers)
+            {
+                <tr>
+                    <td>@user.FirstName @user.MiddleName @user.LastName</td>
+                    <td>@user.Email</td>
+                    <td>@user.DateOfBirth</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary" @onclick="() => ApproveUser(user.Id)">Approve and issue key</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+<h2>Public Key Replacement Requests</h2>
+@if (replacementRequests.Count == 0)
+{
+    <p>No pending key replacement requests.</p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>User</th>
+                <th>Reason</th>
+                <th>Requested</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var request in replacementRequests)
+            {
+                <tr>
+                    <td>@request.User.Email</td>
+                    <td>@request.Reason</td>
+                    <td>@request.RequestedAt.LocalDateTime</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary" @onclick="() => ApproveReplacement(request.Id)">Approve and issue key</button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<ApplicationUser> pendingUsers = [];
+    private List<PublicKeyReplacementRequest> replacementRequests = [];
+    private string? issuedKey;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task ApproveUser(string userId)
+    {
+        issuedKey = null;
+        var admin = await GetCurrentAdminAsync();
+        var result = await RegistrationService.ApproveUserAndIssueKeyAsync(userId, admin.Id);
+        issuedKey = result.RegistrationKey;
+        await LoadAsync();
+    }
+
+    private async Task ApproveReplacement(int requestId)
+    {
+        issuedKey = null;
+        var admin = await GetCurrentAdminAsync();
+        var result = await RegistrationService.ApproveKeyReplacementAndIssueKeyAsync(requestId, admin.Id);
+        issuedKey = result.RegistrationKey;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        pendingUsers = await DbContext.Users
+            .Where(user => user.ApprovalStatus == UserApprovalStatus.PendingApproval)
+            .OrderBy(user => user.CreatedAt)
+            .ToListAsync();
+
+        replacementRequests = await DbContext.PublicKeyReplacementRequests
+            .Include(request => request.User)
+            .Where(request => request.Status == KeyReplacementRequestStatus.Pending)
+            .OrderBy(request => request.RequestedAt)
+            .ToListAsync();
+    }
+
+    private async Task<ApplicationUser> GetCurrentAdminAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        return await UserManager.GetUserAsync(authState.User)
+            ?? throw new InvalidOperationException("Current administrator was not found.");
+    }
+}

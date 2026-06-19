@@ -1,0 +1,158 @@
+@page "/signing/{ProcessId:int}"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using DigitalSignDocuments.Web.Data
+@using DigitalSignDocuments.Web.Services
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
+@using System.Text
+
+@inject ApplicationDbContext DbContext
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject UserManager<ApplicationUser> UserManager
+@inject IDocumentSigningService SigningService
+@inject IJSRuntime JS
+
+<PageTitle>Sign Document</PageTitle>
+
+@if (process is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <h1>Sign @process.Document.FileName</h1>
+
+    @if (!string.IsNullOrWhiteSpace(message))
+    {
+        <div class="alert alert-info">@message</div>
+    }
+
+    <dl>
+        <dt>Document Hash</dt>
+        <dd><code>@process.Document.Sha256Hash</code></dd>
+        <dt>Status</dt>
+        <dd>@process.Status</dd>
+    </dl>
+
+    @if (payload is not null)
+    {
+        <h2>Payload To Sign</h2>
+        <textarea class="form-control font-monospace" rows="6" readonly>@payload.Payload</textarea>
+        <p class="mt-2">Payload hash: <code>@payload.PayloadHash</code></p>
+
+        <div class="mb-3">
+            <label class="form-label">Private key file</label>
+            <InputFile OnChange="LoadPrivateKeyAsync" class="form-control" />
+            <div class="form-text">The private key file is read by the browser session and is not uploaded to the server.</div>
+        </div>
+        <button class="btn btn-success me-2" @onclick="SignAsync" disabled="@string.IsNullOrWhiteSpace(privateKeyPem)">Sign</button>
+        <button class="btn btn-outline-danger" @onclick="RejectAsync">Reject</button>
+        <InputText @bind-Value="rejectionReason" class="form-control mt-2" placeholder="Optional rejection reason" />
+    }
+
+    <h2 class="mt-4">My Signature</h2>
+    <button class="btn btn-outline-warning" @onclick="WithdrawAsync">Withdraw signature</button>
+
+    @if (process.Conversation is not null)
+    {
+        <p class="mt-3">
+            <a href="@($"chat/{process.Conversation.Id}")">Open group chat</a>
+        </p>
+    }
+}
+
+@code {
+    [Parameter]
+    public int ProcessId { get; set; }
+
+    private ApplicationUser? currentUser;
+    private SigningProcess? process;
+    private SigningPayload? payload;
+    private string? privateKeyPem;
+    private string? rejectionReason;
+    private string? message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        currentUser = await UserManager.GetUserAsync(authState.User);
+        await LoadAsync();
+    }
+
+    private async Task LoadPrivateKeyAsync(InputFileChangeEventArgs args)
+    {
+        await using var stream = args.File.OpenReadStream(128 * 1024);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        privateKeyPem = await reader.ReadToEndAsync();
+        message = "Private key loaded locally for this browser session.";
+    }
+
+    private async Task SignAsync()
+    {
+        try
+        {
+            var signature = await JS.InvokeAsync<string>("digitalSigningCrypto.signPayload", privateKeyPem, payload!.Payload);
+            await SigningService.SubmitSignatureAsync(ProcessId, currentUser!.Id, signature);
+            message = "Signature submitted.";
+            privateKeyPem = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+        }
+    }
+
+    private async Task RejectAsync()
+    {
+        try
+        {
+            await SigningService.RejectAsync(ProcessId, currentUser!.Id, rejectionReason);
+            message = "Document rejected. The process is suspended until the author acts.";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+        }
+    }
+
+    private async Task WithdrawAsync()
+    {
+        try
+        {
+            await SigningService.WithdrawSignatureAsync(ProcessId, currentUser!.Id);
+            message = "Signature withdrawn.";
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        process = await DbContext.SigningProcesses
+            .Include(item => item.Document)
+            .Include(item => item.Conversation)
+            .Include(item => item.Signatories.OrderBy(signatory => signatory.Sequence))
+            .ThenInclude(signatory => signatory.User)
+            .SingleOrDefaultAsync(item => item.Id == ProcessId);
+
+        payload = null;
+        if (process is not null && currentUser is not null)
+        {
+            try
+            {
+                payload = await SigningService.GetSigningPayloadAsync(ProcessId, currentUser.Id);
+            }
+            catch
+            {
+                // The page still shows status and withdrawal options when it is not the user's turn.
+            }
+        }
+    }
+}
